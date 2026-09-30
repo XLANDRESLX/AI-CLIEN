@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chatbot Local en CPU (Qwen2)</title>
+    <title>Chatbot Local en CPU (TinyLlama)</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1d21; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; height: 100vh;}
         .container { width: 100%; max-width: 600px; background: #25292e; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); display: flex; flex-direction: column; height: 100%; }
@@ -29,15 +29,13 @@
 <body>
 
     <div class="container">
-        <h2>Chatbot Qwen2-0.5B (Español)</h2>
-        <div id="status">Iniciando motor... (la primera vez tardará en descargar el modelo, aprox. 200MB)</div>
+        <h2>Chatbot TinyLlama-1.1B (Español)</h2>
+        <div id="status">Iniciando motor... (descargando modelo público, aprox. 600MB la primera vez)</div>
         
-        <div id="chat-history">
-            <!-- Los mensajes aparecerán aquí -->
-        </div>
+        <div id="chat-history"></div>
         
         <div class="input-area">
-            <input type="text" id="user-input" placeholder="Escribe tu mensaje en español..." disabled>
+            <input type="text" id="user-input" placeholder="Escribe tu mensaje..." disabled>
             <button id="send-btn" onclick="enviarMensaje()" disabled>Enviar</button>
         </div>
     </div>
@@ -45,9 +43,8 @@
     <script type="module">
         import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
 
-        // Configuraciones para optimizar en CPU con 8GB RAM
         env.allowLocalModels = false;
-        env.backends.onnx.wasm.numThreads = Math.min(navigator.hardwareConcurrency, 4); // Limitar a 4 hilos para no saturar el Ryzen
+        env.backends.onnx.wasm.numThreads = Math.min(navigator.hardwareConcurrency, 4);
 
         const statusDiv = document.getElementById('status');
         const inputField = document.getElementById('user-input');
@@ -55,29 +52,25 @@
         const chatHistory = document.getElementById('chat-history');
 
         let generator = null;
-        let chatMessages = [];
 
         async function cargarModelo() {
-            statusDiv.textContent = "Descargando y cargando modelo Qwen2 (esto ocurre solo la primera vez)...";
+            statusDiv.textContent = "Descargando TinyLlama en la CPU (esto puede tardar unos minutos la primera vez)...";
             sendBtn.disabled = true;
 
             try {
-                // Usamos el modelo Qwen2-0.5B-Instruct optimizado para web
-                generator = await pipeline('text-generation', 'Xenova/Qwen2-0.5B-Instruct', {
-                    // quantized: true, // Usar versión cuantizada para ahorrar RAM (activado por defecto en v2)
-                    revision: 'main'
-                });
+                // Usamos TinyLlama que es público y libre de restricciones 401
+                generator = await pipeline('text-generation', 'Xenova/TinyLlama-1.1B-Chat-v1.0');
                 
-                statusDiv.textContent = "¡Motor listo! Ya puedes chatear. (Respuestas pueden tardar unos segundos en CPU)";
+                statusDiv.textContent = "¡Modelo listo en CPU!";
                 statusDiv.style.color = "#a5d6a7";
                 inputField.disabled = false;
                 sendBtn.disabled = false;
                 inputField.focus();
                 
-                agregarMensaje("assistant", "¡Hola! Soy un asistente inteligente corriendo localmente en tu computadora. ¿En qué puedo ayudarte hoy?");
+                agregarMensaje("assistant", "¡Hola! Ya estoy cargado en tu navegador usando la CPU. ¿Qué te gustaría consultar?");
 
             } catch (e) {
-                statusDiv.textContent = "Error al cargar el modelo. Verifica tu conexión a internet o abre la consola (F12).";
+                statusDiv.textContent = "Error al cargar el modelo. Revisa la consola (F12).";
                 statusDiv.style.color = "#ef5350";
                 console.error(e);
             }
@@ -87,50 +80,40 @@
             const textoUsuario = inputField.value.trim();
             if (!textoUsuario || !generator) return;
 
-            // Limpiar input y deshabilitar
             inputField.value = '';
             inputField.disabled = true;
             sendBtn.disabled = true;
             sendBtn.textContent = "Pensando...";
 
-            // Agregar mensaje del usuario
             agregarMensaje("user", textoUsuario);
 
-            // Añadir a historial de conversación (formato para Qwen)
-            chatMessages.push({ role: 'user', content: textoUsuario });
+            // Formato de prompt para TinyLlama Chat
+            const prompt = `<|system|>\Eres un asistente útil y amable que responde en español.</s>\n<|user|>\n${textoUsuario}</s>\n<|assistant|>\n`;
 
             try {
-                // Generar respuesta
-                // Usamos parámetros para chat
                 const startTime = performance.now();
                 
-                // Qwen2-Instruct maneja bien el español. Limitamos tokens para que no se cuelgue.
-                const output = await generator(textoUsuario, { 
-                    max_new_tokens: 150, // Longitud máxima de la respuesta
-                    temperature: 0.7,    // Un poco de creatividad
+                const output = await generator(prompt, { 
+                    max_new_tokens: 120,
+                    temperature: 0.7,
                     do_sample: true,
-                    repetition_penalty: 1.1, // Evitar bucles
-                    // num_beams: 1 // Más rápido que el beam search
+                    repetition_penalty: 1.15
                 });
                 
                 const endTime = performance.now();
                 const tiempo = ((endTime - startTime) / 1000).toFixed(1);
 
-                // Extraer el texto generado
-                const respuestaIA = output[0].generated_text.trim();
+                let respuestaIA = output[0].generated_text;
                 
-                // NOTA: A veces 'pipeline' con 'text-generation' devuelve el prompt original también.
-                // Si la respuesta contiene el prompt, lo limpiamos.
-                let textoLimpio = respuestaIA;
-                if (textoLimpio.startsWith(textoUsuario)) {
-                    textoLimpio = textoLimpio.substring(textoUsuario.length).trim();
+                // Limpiar el prompt para mostrar solo la respuesta generada
+                if (respuestaIA.includes("<|assistant|>")) {
+                    respuestaIA = respuestaIA.split("<|assistant|>").pop().trim();
                 }
 
-                agregarMensaje("assistant", textoLimpio + ` <small>(${tiempo}s)</small>`);
-                chatMessages.push({ role: 'assistant', content: textoLimpio });
+                agregarMensaje("assistant", respuestaIA + ` <small>(${tiempo}s)</small>`);
 
             } catch (e) {
-                agregarMensaje("assistant", "Lo siento, ha ocurrido un error al generar la respuesta en la CPU.");
+                agregarMensaje("assistant", "Hubo un error al generar la respuesta.");
                 console.error(e);
             } finally {
                 inputField.disabled = false;
@@ -143,26 +126,20 @@
         function agregarMensaje(rol, texto) {
             const div = document.createElement('div');
             div.className = `message ${rol}`;
-            
             if (rol === 'assistant') {
                 div.innerHTML = `<strong>IA Local:</strong> ${texto}`;
             } else {
                 div.textContent = texto;
             }
-            
             chatHistory.appendChild(div);
-            // Auto-scroll al fondo
             chatHistory.scrollTop = chatHistory.scrollHeight;
         }
 
-        // Enter para enviar
         inputField.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') enviarMensaje();
         });
 
-        // Iniciar carga
         cargarModelo();
-
     </script>
 </body>
 </html>
