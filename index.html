@@ -3,92 +3,164 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IA Local en CPU (Transformers.js)</title>
+    <title>Chatbot Local en CPU (Qwen2)</title>
     <style>
-        body { font-family: sans-serif; background-color: #121212; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-        .container { width: 100%; max-width: 500px; background: #1e1e1e; padding: 20px; border-radius: 8px; }
-        textarea, input { width: 100%; padding: 10px; margin-bottom: 10px; background: #2c2c2c; border: 1px solid #444; color: white; border-radius: 4px; box-sizing: border-box;}
-        button { background-color: #bb86fc; color: black; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        button:disabled { background-color: #666; cursor: not-allowed; }
-        #output { margin-top: 20px; background: #2c2c2c; padding: 15px; border-radius: 4px; min-height: 50px; }
-        #status { font-size: 0.9em; color: #888; margin-bottom: 10px; text-align: center;}
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1d21; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; height: 100vh;}
+        .container { width: 100%; max-width: 600px; background: #25292e; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); display: flex; flex-direction: column; height: 100%; }
+        
+        h2 { text-align:center; color: #66bb6a; margin: 15px 0; font-size: 1.2rem; }
+        #status { font-size: 0.85rem; color: #888; margin-bottom: 10px; text-align: center; padding: 0 15px;}
+        
+        #chat-history { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 10px; background: #1a1d21; border-radius: 8px 8px 0 0; border-bottom: 1px solid #333;}
+        .message { padding: 10px 15px; border-radius: 8px; max-width: 80%; line-height: 1.5; word-wrap: break-word; font-size: 0.95rem;}
+        .user { background-color: #0277bd; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .assistant { background-color: #37474f; color: #eceff1; align-self: flex-start; border-bottom-left-radius: 2px; }
+        .assistant strong { color: #81d4fa; display: block; margin-bottom: 5px; font-size: 0.8rem;}
+
+        .input-area { padding: 15px; background: #25292e; border-top: 1px solid #333; display: flex; gap: 10px; border-radius: 0 0 12px 12px; }
+        input[type="text"] { flex: 1; padding: 12px; background: #37474f; border: 1px solid #455a64; color: white; border-radius: 6px; font-size: 1rem; outline: none;}
+        input[type="text"]:focus { border-color: #66bb6a; }
+        button { background-color: #66bb6a; color: #1a1d21; border: none; padding: 0 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 1rem; transition: background 0.2s;}
+        button:hover { background-color: #81c784; }
+        button:disabled { background-color: #546e7a; cursor: not-allowed; color: #b0bec5;}
+
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h2 style="text-align:center">Resumidor (CPU)</h2>
-        <div id="status">Esperando iniciar...</div>
+        <h2>Chatbot Qwen2-0.5B (Español)</h2>
+        <div id="status">Iniciando motor... (la primera vez tardará en descargar el modelo, aprox. 200MB)</div>
         
-        <p>Texto a resumir:</p>
-        <textarea id="input-text" rows="6">Transformers.js es una biblioteca de JavaScript que permite ejecutar modelos de aprendizaje automático directamente en el navegador. Utiliza WebAssembly y, si está disponible, WebGPU para acelerar los cálculos. Al ejecutarse en el cliente, no requiere un servidor centralizado, lo que reduce los costos de alojamiento y mejora la privacidad del usuario, ya que los datos no salen de la computadora del cliente. Sin embargo, la primera carga puede ser lenta debido a la descarga del modelo.</textarea>
+        <div id="chat-history">
+            <!-- Los mensajes aparecerán aquí -->
+        </div>
         
-        <button id="summarize-btn" onclick="resumirTexto()" disabled>Resumir</button>
-        
-        <h3>Resultado:</h3>
-        <div id="output">...</div>
+        <div class="input-area">
+            <input type="text" id="user-input" placeholder="Escribe tu mensaje en español..." disabled>
+            <button id="send-btn" onclick="enviarMensaje()" disabled>Enviar</button>
+        </div>
     </div>
 
     <script type="module">
-        // Importar la librería desde CDN
         import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
 
-        // IMPORTANTE: Desactivar WebGPU explícitamente para forzar el uso de CPU/Wasm
+        // Configuraciones para optimizar en CPU con 8GB RAM
         env.allowLocalModels = false;
-        env.backends.onnx.wasm.numThreads = navigator.hardwareConcurrency || 4; // Usar hilos disponibles
+        env.backends.onnx.wasm.numThreads = Math.min(navigator.hardwareConcurrency, 4); // Limitar a 4 hilos para no saturar el Ryzen
 
         const statusDiv = document.getElementById('status');
-        const inputArea = document.getElementById('input-text');
-        const btn = document.getElementById('summarize-btn');
-        const outputDiv = document.getElementById('output');
+        const inputField = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const chatHistory = document.getElementById('chat-history');
 
-        let summarizer = null;
+        let generator = null;
+        let chatMessages = [];
 
         async function cargarModelo() {
-            statusDiv.textContent = "Cargando modelo en CPU (esto tomará un tiempo la primera vez)...";
-            btn.disabled = true;
+            statusDiv.textContent = "Descargando y cargando modelo Qwen2 (esto ocurre solo la primera vez)...";
+            sendBtn.disabled = true;
 
             try {
-                // Usamos un modelo pequeño optimizado para web: t5-small
-                // Al estar en un módulo, esto descargará los archivos necesarios
-                summarizer = await pipeline('summarization', 'Xenova/t5-small');
+                // Usamos el modelo Qwen2-0.5B-Instruct optimizado para web
+                generator = await pipeline('text-generation', 'Xenova/Qwen2-0.5B-Instruct', {
+                    // quantized: true, // Usar versión cuantizada para ahorrar RAM (activado por defecto en v2)
+                    revision: 'main'
+                });
                 
-                statusDiv.textContent = "¡Modelo listo en CPU! Puedes escribir tu texto.";
-                statusDiv.style.color = "#81c784";
-                btn.disabled = false;
+                statusDiv.textContent = "¡Motor listo! Ya puedes chatear. (Respuestas pueden tardar unos segundos en CPU)";
+                statusDiv.style.color = "#a5d6a7";
+                inputField.disabled = false;
+                sendBtn.disabled = false;
+                inputField.focus();
+                
+                agregarMensaje("assistant", "¡Hola! Soy un asistente inteligente corriendo localmente en tu computadora. ¿En qué puedo ayudarte hoy?");
+
             } catch (e) {
-                statusDiv.textContent = "Error al cargar el modelo. Revisa la consola.";
-                statusDiv.style.color = "#e57373";
+                statusDiv.textContent = "Error al cargar el modelo. Verifica tu conexión a internet o abre la consola (F12).";
+                statusDiv.style.color = "#ef5350";
                 console.error(e);
             }
         }
 
-        window.resumirTexto = async function() {
-            const texto = inputArea.value;
-            if (!texto || !summarizer) return;
+        window.enviarMensaje = async function() {
+            const textoUsuario = inputField.value.trim();
+            if (!textoUsuario || !generator) return;
 
-            btn.disabled = true;
-            btn.textContent = "Resumiendo (CPU lento)...";
-            outputDiv.textContent = "La CPU está trabajando...";
+            // Limpiar input y deshabilitar
+            inputField.value = '';
+            inputField.disabled = true;
+            sendBtn.disabled = true;
+            sendBtn.textContent = "Pensando...";
+
+            // Agregar mensaje del usuario
+            agregarMensaje("user", textoUsuario);
+
+            // Añadir a historial de conversación (formato para Qwen)
+            chatMessages.push({ role: 'user', content: textoUsuario });
 
             try {
-                // Ejecutar el modelo. T5-small puede tardar bastante en CPU.
+                // Generar respuesta
+                // Usamos parámetros para chat
                 const startTime = performance.now();
-                const resultado = await summarizer(texto, { max_length: 60, min_length: 25, do_sample: false });
-                const endTime = performance.now();
                 
-                const tiempoSegundos = ((endTime - startTime) / 1000).toFixed(2);
-                outputDiv.textContent = resultado[0].summary_text + ` (Tiempo: ${tiempoSegundos}s)`;
+                // Qwen2-Instruct maneja bien el español. Limitamos tokens para que no se cuelgue.
+                const output = await generator(textoUsuario, { 
+                    max_new_tokens: 150, // Longitud máxima de la respuesta
+                    temperature: 0.7,    // Un poco de creatividad
+                    do_sample: true,
+                    repetition_penalty: 1.1, // Evitar bucles
+                    // num_beams: 1 // Más rápido que el beam search
+                });
+                
+                const endTime = performance.now();
+                const tiempo = ((endTime - startTime) / 1000).toFixed(1);
+
+                // Extraer el texto generado
+                const respuestaIA = output[0].generated_text.trim();
+                
+                // NOTA: A veces 'pipeline' con 'text-generation' devuelve el prompt original también.
+                // Si la respuesta contiene el prompt, lo limpiamos.
+                let textoLimpio = respuestaIA;
+                if (textoLimpio.startsWith(textoUsuario)) {
+                    textoLimpio = textoLimpio.substring(textoUsuario.length).trim();
+                }
+
+                agregarMensaje("assistant", textoLimpio + ` <small>(${tiempo}s)</small>`);
+                chatMessages.push({ role: 'assistant', content: textoLimpio });
+
             } catch (e) {
-                outputDiv.textContent = "Error durante la generación.";
+                agregarMensaje("assistant", "Lo siento, ha ocurrido un error al generar la respuesta en la CPU.");
                 console.error(e);
             } finally {
-                btn.disabled = false;
-                btn.textContent = "Resumir";
+                inputField.disabled = false;
+                sendBtn.disabled = false;
+                sendBtn.textContent = "Enviar";
+                inputField.focus();
             }
         };
 
-        // Iniciar la carga al abrir la página
+        function agregarMensaje(rol, texto) {
+            const div = document.createElement('div');
+            div.className = `message ${rol}`;
+            
+            if (rol === 'assistant') {
+                div.innerHTML = `<strong>IA Local:</strong> ${texto}`;
+            } else {
+                div.textContent = texto;
+            }
+            
+            chatHistory.appendChild(div);
+            // Auto-scroll al fondo
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        // Enter para enviar
+        inputField.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') enviarMensaje();
+        });
+
+        // Iniciar carga
         cargarModelo();
 
     </script>
